@@ -519,6 +519,7 @@ class BeeperDiscordBridge:
             avatar_url=avatar_url,
             files=files_to_send,
             matrix_event_id=event.event_id,
+            silent=is_self,
         )
 
     # ---------------- XMPP -> Discord Relay ---------------- #
@@ -599,6 +600,7 @@ class BeeperDiscordBridge:
                 avatar_url=clean_avatar,
                 files=files or [],
                 matrix_event_id=f"xmpp_{uuid.uuid4().hex[:12]}",
+                silent=is_self,
             )
 
     # ---------------- MS Teams -> Discord Relay ---------------- #
@@ -679,6 +681,7 @@ class BeeperDiscordBridge:
                 avatar_url=clean_avatar,
                 files=[],
                 matrix_event_id=f"teams_{uuid.uuid4().hex[:12]}",
+                silent=is_self,
             )
 
     async def update_teams_token(self, new_token: str) -> tuple[bool, str]:
@@ -789,6 +792,7 @@ class BeeperDiscordBridge:
                 avatar_url=clean_avatar,
                 files=files or [],
                 matrix_event_id=msg_id or f"beep_{uuid.uuid4().hex[:12]}",
+                silent=is_self,
             )
 
     # ---------------- BlueBubbles -> Discord Relay ---------------- #
@@ -871,6 +875,7 @@ class BeeperDiscordBridge:
                 avatar_url=clean_avatar,
                 files=files or [],
                 matrix_event_id=msg_id or f"bb_{uuid.uuid4().hex[:12]}",
+                silent=is_self,
             )
 
             if not is_self:
@@ -1008,6 +1013,7 @@ class BeeperDiscordBridge:
                 avatar_url=avatar_url,
                 files=[],
                 matrix_event_id=msg_id or f"aim_{uuid.uuid4().hex[:12]}",
+                silent=is_self,
             )
 
     async def handle_aim_buddy_update(
@@ -1100,6 +1106,7 @@ class BeeperDiscordBridge:
                 avatar_url=avatar_url,
                 files=[],
                 matrix_event_id=msg_id or f"slsk_{uuid.uuid4().hex[:12]}",
+                silent=is_self,
             )
 
     async def handle_email_message(
@@ -1270,6 +1277,9 @@ class BeeperDiscordBridge:
                         channel_id=message.channel.id,
                         sender_id="me",
                     )
+                    # Replying from Discord means you've seen the chat up to
+                    # this point, so mark it read on the iPhone too.
+                    await self.bluebubbles_client.mark_chat_read(target_chat_guid)
                 if self.config.bridge.send_reactions:
                     try:
                         await message.add_reaction("✅")

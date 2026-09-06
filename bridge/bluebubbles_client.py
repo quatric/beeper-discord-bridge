@@ -654,6 +654,24 @@ class BlueBubblesBridgeClient:
                         att_guid = att.get("guid")
                         if not att_guid:
                             continue
+                        raw_mime = (att.get("mimeType") or "").split(";")[0].strip()
+                        transfer_name = att.get("transferName") or ""
+                        if not raw_mime or transfer_name.lower().endswith(
+                            ".pluginpayloadattachment"
+                        ):
+                            # iMessage rich-link previews (URLBalloonProvider) and
+                            # similar app-extension payloads attach one of these
+                            # per message - they're Apple's private serialized
+                            # blob format, not real downloadable content, and the
+                            # actual link/text is already in the message body. BB
+                            # reports no usable mimeType for them, which is what
+                            # made these show up as useless ".bin" files.
+                            logger.debug(
+                                "Skipping non-renderable BlueBubbles attachment %s (%s)",
+                                att_guid,
+                                transfer_name or "no mimeType",
+                            )
+                            continue
                         downloaded = await self.download_attachment(att_guid)
                         if not downloaded:
                             continue

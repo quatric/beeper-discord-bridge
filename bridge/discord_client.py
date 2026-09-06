@@ -408,8 +408,16 @@ class DiscordBridgeClient(commands.Bot):
         avatar_url: Optional[str] = None,
         files: Optional[List[Tuple[str, bytes]]] = None,
         matrix_event_id: str = "",
+        silent: bool = False,
     ):
-        """Relay incoming Matrix message to Discord using webhooks or standard channel message."""
+        """Relay incoming Matrix message to Discord using webhooks or standard channel message.
+
+        `silent` suppresses the push notification/ping for this message (Discord's
+        @silent flag) - use it for messages that are just mirroring something the
+        user already sent themselves on another platform, so it doesn't ping them
+        for their own text. Note this only suppresses the notification; Discord's
+        bot API has no way to prevent the channel showing an unread indicator for
+        another message, since that's driven by the viewer's own read-cursor."""
         if text:
             text = strip_html_to_discord_text(text)
 
@@ -476,6 +484,7 @@ class DiscordBridgeClient(commands.Bot):
                             avatar_url=clean_avatar,
                             files=cur_files,
                             wait=True,
+                            silent=silent,
                         )
                         sent_msg_ids.append(msg.id)
                     except discord.HTTPException as he:
@@ -495,6 +504,7 @@ class DiscordBridgeClient(commands.Bot):
                                 username=clean_sender,
                                 avatar_url=clean_avatar,
                                 wait=True,
+                                silent=silent,
                             )
                             sent_msg_ids.append(msg.id)
                         else:
@@ -507,12 +517,15 @@ class DiscordBridgeClient(commands.Bot):
                         msg = await channel.send(
                             content=f"{header}{chunk}".strip(),
                             files=cur_files,
+                            silent=silent,
                         )
                         sent_msg_ids.append(msg.id)
                     except discord.HTTPException as he:
                         if cur_files:
                             fallback_content = f"{header}{chunk}\n*(Attachment exceeded Discord upload limit)*"
-                            msg = await channel.send(content=fallback_content.strip())
+                            msg = await channel.send(
+                                content=fallback_content.strip(), silent=silent
+                            )
                             sent_msg_ids.append(msg.id)
                         else:
                             raise
