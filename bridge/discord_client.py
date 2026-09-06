@@ -188,6 +188,26 @@ class DiscordBridgeClient(commands.Bot):
                         logger.warning(
                             "Could not rename channel %s: %s", channel.id, exc
                         )
+
+                # Keep the channel in the category matching its bridge network,
+                # so renaming a network's category (or fixing a wrong mapping)
+                # also fixes channels created before the change.
+                desired_category = await self.get_or_create_category(
+                    self.get_category_for_network(network)
+                )
+                if desired_category and channel.category_id != desired_category.id:
+                    try:
+                        await channel.edit(
+                            category=desired_category,
+                            reason="Fix bridge network category",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not move channel %s to category %s: %s",
+                            channel.id,
+                            desired_category.name,
+                            exc,
+                        )
                 return channel
 
         if not self.bridge_config.auto_create_channels:
@@ -259,7 +279,7 @@ class DiscordBridgeClient(commands.Bot):
             "telegram": "\U0001f4ac Telegram",
             "signal": "\U0001f4ac Signal",
             "googlemessages": "\U0001f4ac SMS / RCS",
-            "googlechat": "\U0001f4ac Google Chat on Beeper",
+            "googlechat": "\U0001f4ac Google Chat",
             "gvoice": "\U0001f4ac Google Voice",
             "google voice": "\U0001f4ac Google Voice",
             "linkedin": "\U0001f4ac LinkedIn",
