@@ -759,6 +759,19 @@ class DiscordBridgeClient(commands.Bot):
             else:
                 await message.channel.send("⚠️ Teams token updater is not registered.")
 
+        elif cmd in ("sentry-test", "test-sentry", "sentry"):
+            await message.channel.send("🚨 Triggering test Sentry exception...")
+            try:
+                raise ZeroDivisionError("Sentry test exception from Beeper-Discord bridge")
+            except ZeroDivisionError as exc:
+                try:
+                    import sentry_sdk
+
+                    sentry_sdk.capture_exception(exc)
+                    await message.channel.send("✅ Test exception captured and sent to Sentry!")
+                except Exception as err:
+                    await message.channel.send(f"⚠️ Failed to send exception to Sentry: {err}")
+
         elif cmd == "unlink":
             room_id = self.db.get_matrix_room_by_channel(message.channel.id)
             if room_id:
@@ -768,6 +781,7 @@ class DiscordBridgeClient(commands.Bot):
                 )
             else:
                 await message.channel.send("ℹ️ This channel was not linked.")
+
 
         else:
             embed = discord.Embed(
@@ -807,6 +821,12 @@ class DiscordBridgeClient(commands.Bot):
                 inline=False,
             )
             embed.add_field(
+                name=f"`{prefix} sentry-test`",
+                value="Trigger a test error and send to Sentry.",
+                inline=False,
+            )
+            embed.add_field(
                 name=f"`{prefix} help`", value="Display this help menu.", inline=False
             )
             await message.channel.send(embed=embed)
+

@@ -81,6 +81,10 @@ bridge:
   # Log level: DEBUG, INFO, WARNING, ERROR
   log_level: "INFO"
 
+  # Sentry DSN for error monitoring and telemetry
+  sentry_dsn: "https://20cc096076527940901b46de398ebc68@o107347.ingest.us.sentry.io/4512040257585152"
+
+
 aim:
   # Enable AIM Phoenix / OSCAR bridging
   enabled: false

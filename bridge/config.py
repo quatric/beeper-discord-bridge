@@ -43,6 +43,8 @@ class BridgeConfig:
     send_reactions: bool = True
     channel_inactivity_ttl_hours: int = 24
     channel_cleanup_interval_seconds: int = 300
+    sentry_dsn: str = ""
+
 
 
 @dataclass
@@ -290,7 +292,15 @@ class Config:
                     bridge_data.get("channel_cleanup_interval_seconds", 300),
                 )
             ),
+            sentry_dsn=os.getenv(
+                "SENTRY_DSN",
+                bridge_data.get(
+                    "sentry_dsn",
+                    "https://20cc096076527940901b46de398ebc68@o107347.ingest.us.sentry.io/4512040257585152",
+                ),
+            ),
         )
+
 
         xmpp_data = data.get("xmpp", {})
         xmpp_cfg = XMPPConfig(
