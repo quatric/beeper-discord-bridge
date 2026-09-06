@@ -26,12 +26,14 @@ class DiscordBridgeClient(commands.Bot):
         on_discord_message_callback: Optional[Callable] = None,
         on_manual_sync_callback: Optional[Callable] = None,
         on_teams_token_callback: Optional[Callable] = None,
+        on_discord_reaction_callback: Optional[Callable] = None,
     ):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.guilds = True
         intents.webhooks = True
         intents.members = True
+        intents.reactions = True
 
         super().__init__(
             command_prefix=(
@@ -49,6 +51,7 @@ class DiscordBridgeClient(commands.Bot):
         self.on_discord_message_callback = on_discord_message_callback
         self.on_manual_sync_callback = on_manual_sync_callback
         self.on_teams_token_callback = on_teams_token_callback
+        self.on_discord_reaction_callback = on_discord_reaction_callback
         self.target_guild: Optional[discord.Guild] = None
         self.status_channel: Optional[discord.TextChannel] = None
         self.user_display_name: str = "You"
@@ -559,6 +562,88 @@ class DiscordBridgeClient(commands.Bot):
                         await message.add_reaction("❌")
                     except Exception:
                         pass
+
+    async def add_reaction_to_message(
+        self, channel_id: int, discord_message_id: int, emoji: str
+    ) -> bool:
+        """Add an emoji reaction to an already-sent Discord message (used to
+        mirror an incoming BlueBubbles tapback)."""
+        try:
+            channel = self.get_channel(channel_id) or await self.fetch_channel(
+                channel_id
+            )
+            message = await channel.fetch_message(discord_message_id)
+            await message.add_reaction(emoji)
+            return True
+        except Exception as e:
+            logger.debug(
+                "Could not add reaction %s to Discord message %s: %s",
+                emoji,
+                discord_message_id,
+                e,
+            )
+            return False
+
+    async def remove_reaction_from_message(
+        self, channel_id: int, discord_message_id: int, emoji: str
+    ) -> bool:
+        """Remove the bot's own emoji reaction from a Discord message (used
+        when an incoming BlueBubbles tapback is retracted)."""
+        try:
+            channel = self.get_channel(channel_id) or await self.fetch_channel(
+                channel_id
+            )
+            message = await channel.fetch_message(discord_message_id)
+            await message.remove_reaction(emoji, self.user)
+            return True
+        except Exception as e:
+            logger.debug(
+                "Could not remove reaction %s from Discord message %s: %s",
+                emoji,
+                discord_message_id,
+                e,
+            )
+            return False
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """Relay a user reacting to a bridged Discord message back to the
+        source platform (currently: BlueBubbles tapbacks)."""
+        if payload.user_id == (self.user.id if self.user else None):
+            return
+        if not self.on_discord_reaction_callback:
+            return
+        matrix_room_id = self.db.get_matrix_room_by_channel(payload.channel_id)
+        if not matrix_room_id:
+            return
+        try:
+            await self.on_discord_reaction_callback(
+                matrix_room_id=matrix_room_id,
+                discord_message_id=payload.message_id,
+                emoji=str(payload.emoji),
+                is_removal=False,
+            )
+        except Exception as e:
+            logger.error("Error relaying Discord reaction add: %s", e)
+
+    async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent):
+        """Relay a user removing a reaction from a bridged Discord message
+        back to the source platform."""
+        if payload.user_id == (self.user.id if self.user else None):
+            return
+        if not self.on_discord_reaction_callback:
+            return
+        matrix_room_id = self.db.get_matrix_room_by_channel(payload.channel_id)
+        if not matrix_room_id:
+            return
+        try:
+            await self.on_discord_reaction_callback(
+                matrix_room_id=matrix_room_id,
+                discord_message_id=payload.message_id,
+                emoji=str(payload.emoji),
+                is_removal=True,
+            )
+        except Exception as e:
+            logger.error("Error relaying Discord reaction remove: %s", e)
 
     async def _handle_bot_command(self, message: discord.Message, cmd_str: str):
         """Handle bridge management commands."""

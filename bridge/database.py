@@ -288,6 +288,32 @@ class Database:
             )
             return cursor.fetchone() is not None
 
+    def get_message_mapping(self, matrix_event_id: str) -> Optional[Dict[str, Any]]:
+        """Look up the Discord message/channel a given matrix_event_id (e.g. a
+        BlueBubbles message GUID) was relayed to."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM message_mappings WHERE matrix_event_id = ?",
+                (matrix_event_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_matrix_event_by_discord_message(
+        self, discord_message_id: int
+    ) -> Optional[str]:
+        """Reverse lookup: find the source-platform message id (matrix_event_id)
+        that a given Discord message was relayed from."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT matrix_event_id FROM message_mappings WHERE discord_message_id = ?",
+                (discord_message_id,),
+            )
+            row = cursor.fetchone()
+            return row["matrix_event_id"] if row else None
+
     def record_outgoing_tx(self, txn_id: str, discord_message_id: int = 0):
         now = time.time()
         with self._get_connection() as conn:
