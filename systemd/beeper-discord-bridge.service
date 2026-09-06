@@ -1,0 +1,15 @@
+[Unit]
+Description=Beeper <-> Discord Dynamic Bridge Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/workspace/beeper-discord-bridge
+ExecStart=/workspace/beeper-discord-bridge/venv/bin/python3 main.py -c config.yaml
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

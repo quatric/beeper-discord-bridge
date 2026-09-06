@@ -1,0 +1,151 @@
+# Beeper <-> Discord Bridge Configuration
+
+matrix:
+  # Beeper Matrix Homeserver URL (default: https://matrix.beeper.com)
+  homeserver: "https://matrix.beeper.com"
+  
+  # Your Beeper Matrix User ID (e.g., @your_username:beeper.com)
+  user_id: "@your_username:beeper.com"
+  
+  # Your Beeper Matrix Access Token
+  # (Can be retrieved from Beeper Desktop DevTools or Beeper Settings)
+  access_token: "syt_your_matrix_access_token_here"
+  
+  # Optional device ID (leave empty for auto)
+  device_id: null
+  
+  # Local storage path for Matrix encryption keys and cache
+  store_path: "./matrix_store"
+  
+  # End-to-end encryption support
+  encryption_enabled: true
+  
+  # Whether messages sent by you from the Beeper app appear in Discord
+  sync_self_messages: false
+
+discord:
+  # Your Discord Bot Token (from Discord Developer Portal)
+  bot_token: "YOUR_DISCORD_BOT_TOKEN"
+  
+  # Discord Server (Guild) ID where channels will be created
+  guild_id: 123456789012345678
+  
+  # Discord User IDs allowed to chat and issue bridge commands
+  # (Leave empty to allow all members in your private server)
+  admin_user_ids:
+    - 123456789012345678
+  
+  # Category organization mode:
+  # - "by_platform": Groups chats into categories by app (WhatsApp, iMessage, Telegram, SMS, etc.)
+  # - "single_category": Groups all bridged chats under one single category
+  # - "none": Creates channels directly at the top level
+  category_mode: "by_platform"
+  
+  # Category name when using "single_category" mode
+  default_category_name: "Beeper Chats"
+  
+  # Dedicated channel for bridge status, stats, and logs
+  status_channel_name: "beeper-status"
+  
+  # Optional prefix for created channels (e.g. "💬-")
+  channel_prefix: ""
+  
+  # Enable Discord Webhooks for sender avatars and names
+  enable_webhooks: true
+  
+  # Bot command prefix
+  command_prefix: "!beeper"
+
+bridge:
+  # SQLite database path for persisting channel mappings and message IDs
+  db_path: "./beeper_bridge.db"
+  
+  # Automatically download and bridge media attachments (photos, voice notes, files)
+  download_media: true
+  
+  # Maximum file size to upload to Discord in Megabytes
+  max_attachment_size_mb: 25
+  
+  # Automatically create Discord channels for new or active Beeper rooms
+  auto_create_channels: true
+  
+  # Add reaction checkmark (✅) on Discord messages once sent to Matrix
+  send_reactions: true
+
+  # Delete bridge-created chat channels after this many inactive hours (0 disables)
+  channel_inactivity_ttl_hours: 24
+
+  # How often to check for inactive channels
+  channel_cleanup_interval_seconds: 300
+  
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+
+aim:
+  # Enable AIM Phoenix / OSCAR bridging
+  enabled: false
+  
+  # AIM Phoenix screen name
+  screen_name: "your_screen_name"
+  
+  # AIM Phoenix password
+  password: "your_password"
+  
+  # Server host and port (default is iwarg.ddns.net:5190)
+  server: "iwarg.ddns.net"
+  port: 5190
+  
+  # Discord category name for AIM chats
+  category_name: "💬 AIM Phoenix"
+  
+  # Away message (optional)
+  away_message: ""
+  
+  # Status message
+  status_message: "Online via Discord Bridge"
+
+slskd:
+  # Enable SLSKD Soulseek bridging
+  enabled: false
+
+  # SLSKD HTTP API URL
+  url: "http://localhost:5030"
+
+  # SLSKD API Key (if configured)
+  api_key: ""
+
+  # Polling interval (seconds)
+  poll_interval_seconds: 5
+
+  # Discord category name for Soulseek chats
+  category_name: "💬 Soulseek"
+
+  # Sync private messages
+  sync_private: true
+
+  # Sync room messages
+  sync_rooms: true
+
+  # Sync messages sent by yourself
+  sync_self_messages: true
+
+email:
+  # Enable Gmail (IMAP) -> Discord alert bridging
+  enabled: false
+
+  imap_host: "imap.gmail.com"
+  imap_port: 993
+
+  # Gmail App Passwords (myaccount.google.com/apppasswords, requires 2-Step
+  # Verification) - Gmail rejects plain account passwords for IMAP login.
+  accounts:
+    - address: "you@gmail.com"
+      app_password: ""
+
+  poll_interval_seconds: 60
+
+  # Discord channel + category the mail is posted into
+  channel_name: "alert"
+  category_name: "Log"
+
+
