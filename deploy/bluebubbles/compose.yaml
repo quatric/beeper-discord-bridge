@@ -1,0 +1,23 @@
+services:
+  macos:
+    image: dockurr/macos:latest
+    container_name: bluebubbles-macos
+    environment:
+      VERSION: "13"
+      RAM_SIZE: "4G"
+      CPU_CORES: "2"
+      DISK_SIZE: "64G"
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "8006:8006"
+      - "5900:5900/tcp"
+      - "5900:5900/udp"
+      - "1234:1234"
+    volumes:
+      - /srv/bluebubbles/macos:/storage
+    restart: unless-stopped
+    stop_grace_period: 2m
