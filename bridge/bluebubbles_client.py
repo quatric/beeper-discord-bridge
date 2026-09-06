@@ -1,7 +1,9 @@
 """BlueBubbles iMessage integration using BlueBubbles REST API."""
 
 import asyncio
+import io
 import logging
+import mimetypes
 import re
 import time
 import uuid
@@ -13,6 +15,53 @@ from .database import Database
 
 logger = logging.getLogger("beeper_bridge.bluebubbles")
 
+# BlueBubbles' internal tapback names <-> a display emoji.
+# See BlueBubbles private-api's `associatedMessageType` / message/react "reaction" field.
+TAPBACK_TO_EMOJI = {
+    "love": "❤️",
+    "like": "👍",
+    "dislike": "👎",
+    "laugh": "😂",
+    "emphasize": "‼️",
+    "question": "❓",
+}
+EMOJI_TO_TAPBACK = {}
+for _name, _emoji in TAPBACK_TO_EMOJI.items():
+    EMOJI_TO_TAPBACK[_emoji] = _name
+    # Also match the same emoji without a trailing variation selector, since
+    # different Discord clients/emoji pickers aren't always consistent about
+    # including U+FE0F.
+    EMOJI_TO_TAPBACK[_emoji.rstrip("️")] = _name
+
+# BlueBubbles reports the real mimeType on every attachment, but iMessage
+# photos are frequently HEIC/HEIF (Apple's native format) which Discord cannot
+# preview inline at all - these get converted to JPEG below when Pillow is
+# available. This map keeps other extensions honest even when a filename
+# arrives with no extension or a mismatched one.
+EXTENSION_OVERRIDES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+    "image/webp": ".webp",
+    "video/quicktime": ".mov",
+    "video/mp4": ".mp4",
+    "audio/mp4": ".m4a",
+    "audio/x-caf": ".caf",
+    "audio/aac": ".aac",
+    "application/pdf": ".pdf",
+}
+
+try:
+    from PIL import Image
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    HEIF_SUPPORT = True
+except ImportError:
+    HEIF_SUPPORT = False
+
 
 class BlueBubblesBridgeClient:
     """Async client for BlueBubbles iMessage server."""
@@ -22,10 +71,12 @@ class BlueBubblesBridgeClient:
         config: BlueBubblesConfig,
         db: Database,
         on_message_callback: Optional[Callable] = None,
+        on_reaction_callback: Optional[Callable] = None,
     ):
         self.config = config
         self.db = db
         self.on_message_callback = on_message_callback
+        self.on_reaction_callback = on_reaction_callback
         self.server_url = config.server_url.rstrip("/")
         self.password = config.password
 
@@ -35,6 +86,8 @@ class BlueBubblesBridgeClient:
         self._known_chat_names: Dict[str, str] = {}
         self._contacts_lookup: Dict[str, str] = {}
         self._last_contact_sync: float = 0
+        self._private_api_enabled: Optional[bool] = None
+        self._warned_private_api = False
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session and self._session.closed:
@@ -157,6 +210,117 @@ class BlueBubblesBridgeClient:
             logger.debug("BlueBubbles ping error: %s", e)
             return False
 
+    async def is_private_api_enabled(self) -> bool:
+        """Check (and cache) whether the BlueBubbles server has the Private API
+        enabled. Tapbacks and read receipts require it; without it those
+        endpoints always fail with a 400/401."""
+        if self._private_api_enabled is not None:
+            return self._private_api_enabled
+        try:
+            session = await self._ensure_session()
+            url = self._api_url("server/info")
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    self._private_api_enabled = bool(
+                        (data.get("data") or {}).get("private_api")
+                    )
+                    return self._private_api_enabled
+        except Exception as e:
+            logger.debug("Error checking BlueBubbles private API status: %s", e)
+        return False
+
+    async def mark_chat_read(self, chat_guid: str) -> bool:
+        """Mark a chat as read on the iPhone (requires BlueBubbles Private API)."""
+        if not await self.is_private_api_enabled():
+            if not self._warned_private_api:
+                self._warned_private_api = True
+                logger.warning(
+                    "BlueBubbles Private API is not enabled on the server, so "
+                    "read receipts and tapback reactions cannot be sent. Enable "
+                    "the Private API in the BlueBubbles Helper settings to use them."
+                )
+            return False
+        session = await self._ensure_session()
+        url = self._api_url(f"chat/{chat_guid}/read")
+        try:
+            async with session.post(
+                url, json=None, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status in (200, 201):
+                    return True
+                logger.debug(
+                    "Failed marking BlueBubbles chat %s read: HTTP %d",
+                    chat_guid,
+                    resp.status,
+                )
+                return False
+        except Exception as e:
+            logger.debug("Error marking BlueBubbles chat %s read: %s", chat_guid, e)
+            return False
+
+    @staticmethod
+    def _parse_associated_guid(assoc_guid: str) -> Tuple[str, int]:
+        """BlueBubbles encodes the reacted-to message part index into the
+        associatedMessageGuid, e.g. "p:0/1A2B3C..." -> (guid, part_index)."""
+        if "/" in assoc_guid:
+            prefix, guid = assoc_guid.split("/", 1)
+            if prefix.startswith("p:"):
+                try:
+                    return guid, int(prefix[2:])
+                except ValueError:
+                    return guid, 0
+            return guid, 0
+        return assoc_guid, 0
+
+    async def send_tapback(
+        self, chat_guid: str, target_guid: str, target_part: int, tapback_name: str
+    ) -> bool:
+        """Send (or remove, if tapback_name is prefixed with '-') a tapback
+        reaction to a message via BlueBubbles' Private API."""
+        if not await self.is_private_api_enabled():
+            if not self._warned_private_api:
+                self._warned_private_api = True
+                logger.warning(
+                    "BlueBubbles Private API is not enabled on the server, so "
+                    "read receipts and tapback reactions cannot be sent. Enable "
+                    "the Private API in the BlueBubbles Helper settings to use them."
+                )
+            return False
+        session = await self._ensure_session()
+        url = self._api_url("message/react")
+        payload = {
+            "chatGuid": chat_guid,
+            "selectedMessageGuid": target_guid,
+            "partIndex": target_part,
+            "reaction": tapback_name,
+        }
+        try:
+            async with session.post(
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                if resp.status in (200, 201):
+                    return True
+                err_text = await resp.text()
+                logger.warning(
+                    "Failed sending BlueBubbles tapback %s to %s (HTTP %d): %s",
+                    tapback_name,
+                    target_guid,
+                    resp.status,
+                    err_text,
+                )
+                return False
+        except Exception as e:
+            logger.error(
+                "Error sending BlueBubbles tapback %s to %s: %s",
+                tapback_name,
+                target_guid,
+                e,
+            )
+            return False
+
     async def list_recent_messages(self, limit: int = 25) -> List[Dict[str, Any]]:
         """Fetch latest messages globally across all chats in a single request."""
         session = await self._ensure_session()
@@ -164,7 +328,7 @@ class BlueBubblesBridgeClient:
         payload = {
             "limit": limit,
             "sort": "DESC",
-            "with": ["chats", "handle", "attachments"],
+            "with": ["chats", "chat.participants", "handle", "attachments"],
         }
         try:
             async with session.post(
@@ -210,6 +374,42 @@ class BlueBubblesBridgeClient:
             parts = chat_guid.split(";")
             raw_addr = parts[-1] if len(parts) >= 3 else chat_guid
             return self.resolve_address(raw_addr)
+
+    @staticmethod
+    def _normalize_attachment(
+        filename: str, data: bytes, mime_type: str
+    ) -> Tuple[str, bytes]:
+        """Fix a BlueBubbles attachment's filename/bytes so Discord can
+        actually preview it: convert HEIC/HEIF photos to JPEG (Discord has no
+        inline preview for HEIC at all), and otherwise make sure the filename
+        extension matches the attachment's real mime type instead of trusting
+        a missing/wrong extension (which previously always fell back to a
+        blind ".png", producing a broken image for any non-PNG attachment)."""
+        mime_type = (mime_type or "").split(";")[0].strip().lower()
+        is_heic = mime_type in ("image/heic", "image/heif") or filename.lower().endswith(
+            (".heic", ".heif")
+        )
+        if is_heic and HEIF_SUPPORT:
+            try:
+                img = Image.open(io.BytesIO(data))
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=90)
+                base = filename.rsplit(".", 1)[0] if "." in filename else filename
+                return f"{base}.jpg", buf.getvalue()
+            except Exception as e:
+                logger.warning(
+                    "Failed converting HEIC attachment %s to JPEG: %s", filename, e
+                )
+
+        ext = EXTENSION_OVERRIDES.get(mime_type) or (
+            mimetypes.guess_extension(mime_type) if mime_type else None
+        )
+        if ext:
+            base = filename.rsplit(".", 1)[0] if "." in filename else filename
+            filename = f"{base}{ext}"
+        return filename, data
 
     async def download_attachment(
         self, attachment_guid: str
@@ -302,6 +502,18 @@ class BlueBubblesBridgeClient:
 
         # Initial contact sync
         await self.refresh_contacts()
+        if is_connected:
+            if await self.is_private_api_enabled():
+                logger.info(
+                    "BlueBubbles Private API detected: read receipts and tapback "
+                    "reactions are enabled."
+                )
+            else:
+                logger.warning(
+                    "BlueBubbles Private API is not enabled: read receipts and "
+                    "tapback reactions will not work until it is enabled in the "
+                    "BlueBubbles Helper app settings."
+                )
 
         self.is_running = True
         self._sync_task = asyncio.create_task(self._sync_forever())
@@ -347,6 +559,49 @@ class BlueBubblesBridgeClient:
                     chat = chats[0] if chats else {}
                     chat_guid = chat.get("guid")
                     if not chat_guid:
+                        continue
+
+                    # Tapback (reaction) messages carry an associated-message
+                    # reference instead of being a normal message.
+                    assoc_guid = msg.get("associatedMessageGuid")
+                    assoc_type = msg.get("associatedMessageType")
+                    if assoc_guid and assoc_type:
+                        self.db.record_message(
+                            matrix_event_id=msg_guid,
+                            discord_message_id=0,
+                            channel_id=0,
+                            sender_id=msg.get("handle", {}).get("address", ""),
+                        )
+                        if is_initial_poll:
+                            continue
+                        is_removal = assoc_type.startswith("-")
+                        base_type = assoc_type[1:] if is_removal else assoc_type
+                        tapback_name = next(
+                            (
+                                name
+                                for name in TAPBACK_TO_EMOJI
+                                if name in base_type
+                            ),
+                            None,
+                        )
+                        if tapback_name and self.on_reaction_callback:
+                            target_guid, target_part = self._parse_associated_guid(
+                                assoc_guid
+                            )
+                            try:
+                                await self.on_reaction_callback(
+                                    chat_guid=chat_guid,
+                                    target_msg_guid=target_guid,
+                                    target_part=target_part,
+                                    tapback_name=tapback_name,
+                                    is_removal=is_removal,
+                                    is_from_me=bool(msg.get("isFromMe")),
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    "Error dispatching BlueBubbles tapback to Discord: %s",
+                                    e,
+                                )
                         continue
 
                     is_group = bool(chat.get("isGroup") or ";+;" in chat_guid)
@@ -410,7 +665,11 @@ class BlueBubblesBridgeClient:
                                 len(data),
                             )
                             continue
+                        mime_type = att.get("mimeType") or content_type or ""
                         filename = att.get("transferName") or f"{att_guid}.bin"
+                        filename, data = self._normalize_attachment(
+                            filename, data, mime_type
+                        )
                         files_to_send.append((filename, data))
 
                     if not text:

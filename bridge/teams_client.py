@@ -9,6 +9,7 @@ import os
 import re
 import time
 import urllib.parse
+from pathlib import Path
 from typing import Optional, Callable, Dict, Any, List
 import aiohttp
 import discord
@@ -17,6 +18,11 @@ from .config import TeamsConfig
 from .database import Database
 
 logger = logging.getLogger("beeper_bridge.teams")
+
+# Directory the bridge is actually installed in (not the dev-container path
+# this used to be hardcoded to), so a saved Teams browser profile is found
+# wherever this checkout lives.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Standard Microsoft Multi-Tenant Public Client ID (Developer / VS Code Multi-Tenant)
 DEFAULT_CLIENT_ID = "aebc6443-996d-45c2-90f0-388ff96faa56"
@@ -332,7 +338,7 @@ class TeamsBridgeClient:
                 return self.access_token
 
         # 2. Try headless browser session renewal if browser profile exists
-        browser_profile = "/workspace/beeper-discord-bridge/.teams_browser_profile"
+        browser_profile = str(PROJECT_ROOT / ".teams_browser_profile")
         if os.path.exists(browser_profile):
             try:
                 from .teams_browser_auth import refresh_teams_token_headless

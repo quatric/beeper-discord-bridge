@@ -17,9 +17,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("teams_auth")
 
-CONFIG_FILE = Path("/workspace/beeper-discord-bridge/config.yaml")
-SESSION_FILE = Path("/workspace/beeper-discord-bridge/teams_session.json")
-PROFILE_DIR = "/workspace/beeper-discord-bridge/.teams_browser_profile"
+# Directory the bridge is actually installed in (not the dev-container path
+# this used to be hardcoded to).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_FILE = PROJECT_ROOT / "config.yaml"
+SESSION_FILE = PROJECT_ROOT / "teams_session.json"
+PROFILE_DIR = str(PROJECT_ROOT / ".teams_browser_profile")
 
 
 def extract_jwt_payload(token: str) -> Optional[Dict[str, Any]]:

@@ -28,7 +28,11 @@ from .discord_client import DiscordBridgeClient
 from .xmpp_client import XMPPBridgeClient
 from .teams_client import TeamsBridgeClient
 from .beeper_desktop_client import BeeperDesktopBridgeClient
-from .bluebubbles_client import BlueBubblesBridgeClient
+from .bluebubbles_client import (
+    BlueBubblesBridgeClient,
+    TAPBACK_TO_EMOJI,
+    EMOJI_TO_TAPBACK,
+)
 from .aim_client import AIMBridgeClient
 from .slskd_client import SLSKDBridgeClient
 from .email_client import EmailBridgeClient
@@ -82,6 +86,7 @@ class BeeperDiscordBridge:
                 config=config.bluebubbles,
                 db=self.db,
                 on_message_callback=self.handle_bluebubbles_message,
+                on_reaction_callback=self.handle_bluebubbles_reaction,
             )
             if config.bluebubbles.enabled
             else None
@@ -124,12 +129,14 @@ class BeeperDiscordBridge:
             on_discord_message_callback=self.handle_discord_message,
             on_manual_sync_callback=self.sync_all_rooms,
             on_teams_token_callback=self.update_teams_token,
+            on_discord_reaction_callback=self.handle_discord_reaction,
         )
 
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._discord_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
         self._recent_discord_sends: Dict[Tuple[str, str], float] = {}
+        self._recent_bb_reaction_echoes: Dict[Tuple[str, str, str], float] = {}
 
     def record_discord_send(self, target_id: str, text: str):
         """Record an outgoing message sent from Discord to prevent echoing back."""
@@ -159,6 +166,23 @@ class BeeperDiscordBridge:
                 if now - self._recent_discord_sends[key] < 60:
                     return True
         return False
+
+    def record_recent_bb_reaction_echo(self, key: Tuple[str, str, str]):
+        """Record a tapback we just sent to BlueBubbles from Discord, so the
+        BlueBubbles poll picking it back up (as an is_from_me tapback) doesn't
+        get relayed back to Discord as a duplicate reaction."""
+        now = time.time()
+        self._recent_bb_reaction_echoes[key] = now
+        cutoff = now - 30
+        to_delete = [
+            k for k, ts in self._recent_bb_reaction_echoes.items() if ts < cutoff
+        ]
+        for k in to_delete:
+            del self._recent_bb_reaction_echoes[k]
+
+    def is_recent_bb_reaction_echo(self, key: Tuple[str, str, str]) -> bool:
+        ts = self._recent_bb_reaction_echoes.get(key)
+        return ts is not None and (time.time() - ts) < 30
 
     async def _apply_chat_title(self, channel: Any, title: str):
         """Keep an existing channel aligned with its chat title, without transport prefixes."""
@@ -848,6 +872,76 @@ class BeeperDiscordBridge:
                 files=files or [],
                 matrix_event_id=msg_id or f"bb_{uuid.uuid4().hex[:12]}",
             )
+
+            if not is_self:
+                await self.bluebubbles_client.mark_chat_read(chat_id)
+
+    async def handle_bluebubbles_reaction(
+        self,
+        chat_guid: str,
+        target_msg_guid: str,
+        target_part: int,
+        tapback_name: str,
+        is_removal: bool,
+        is_from_me: bool,
+    ):
+        """Handle an incoming iMessage tapback and mirror it as a Discord reaction
+        on the message it was relayed as."""
+        if is_from_me and self.is_recent_bb_reaction_echo(
+            (chat_guid, target_msg_guid, tapback_name)
+        ):
+            # This is just BlueBubbles echoing back a tapback we ourselves sent
+            # from Discord a moment ago.
+            return
+
+        emoji = TAPBACK_TO_EMOJI.get(tapback_name)
+        if not emoji:
+            return
+
+        mapping = self.db.get_message_mapping(target_msg_guid)
+        if not mapping or not mapping.get("discord_message_id"):
+            return
+
+        if is_removal:
+            await self.discord_client.remove_reaction_from_message(
+                mapping["discord_channel_id"], mapping["discord_message_id"], emoji
+            )
+        else:
+            await self.discord_client.add_reaction_to_message(
+                mapping["discord_channel_id"], mapping["discord_message_id"], emoji
+            )
+
+    async def handle_discord_reaction(
+        self,
+        matrix_room_id: str,
+        discord_message_id: int,
+        emoji: str,
+        is_removal: bool,
+    ):
+        """Handle a user reacting to a bridged Discord message and relay it
+        onward as a tapback (currently: BlueBubbles only)."""
+        if not matrix_room_id.startswith("bb:") or not self.bluebubbles_client:
+            return
+
+        tapback_name = EMOJI_TO_TAPBACK.get(emoji)
+        if not tapback_name:
+            return
+
+        target_msg_guid = self.db.get_matrix_event_by_discord_message(
+            discord_message_id
+        )
+        if not target_msg_guid:
+            return
+
+        chat_guid = matrix_room_id[3:]
+        reaction = f"-{tapback_name}" if is_removal else tapback_name
+        self.record_recent_bb_reaction_echo((chat_guid, target_msg_guid, tapback_name))
+        await self.bluebubbles_client.send_tapback(
+            chat_guid=chat_guid,
+            target_guid=target_msg_guid,
+            target_part=0,
+            tapback_name=reaction,
+        )
 
     # ---------------- AIM Phoenix -> Discord Relay ---------------- #
 
