@@ -37,27 +37,8 @@ async def async_main():
     config = Config.load(args.config)
     setup_logging(config.bridge.log_level)
 
-    if config.bridge.sentry_dsn:
-        try:
-            import sentry_sdk
-
-            sentry_sdk.init(
-                dsn=config.bridge.sentry_dsn,
-                send_default_pii=True,
-            )
-            logging.getLogger("beeper_bridge.main").info("Sentry SDK initialized.")
-        except ImportError:
-            logging.getLogger("beeper_bridge.main").warning(
-                "sentry-sdk package not installed, error monitoring disabled."
-            )
-        except Exception as e:
-            logging.getLogger("beeper_bridge.main").warning(
-                "Failed to initialize Sentry SDK: %s", e
-            )
-
     logger = logging.getLogger("beeper_bridge.main")
     logger.info("Initializing Beeper <-> Discord Bridge...")
-
 
     # Validate essential configurations
     if not config.discord.bot_token:

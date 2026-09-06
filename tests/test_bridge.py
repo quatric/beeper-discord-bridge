@@ -126,19 +126,8 @@ class TestBridgeComponents(unittest.TestCase):
             "https://matrix.beeper.com/_matrix/media/r0/download/beeper.com/abcdef123456",
         )
 
-    def test_sentry_config(self):
-        b_cfg = BridgeConfig(
-
-            sentry_dsn="https://20cc096076527940901b46de398ebc68@o107347.ingest.us.sentry.io/4512040257585152"
-        )
-        self.assertEqual(
-            b_cfg.sentry_dsn,
-            "https://20cc096076527940901b46de398ebc68@o107347.ingest.us.sentry.io/4512040257585152",
-        )
-
 
 class TestEncryptedMatrixEvents(unittest.IsolatedAsyncioTestCase):
-
     async def test_live_encrypted_event_provisions_room_and_requests_key(self):
         on_room_discovered = AsyncMock()
         client = MatrixBridgeClient(
