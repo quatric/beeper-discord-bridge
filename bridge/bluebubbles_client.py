@@ -15,8 +15,11 @@ from .database import Database
 
 logger = logging.getLogger("beeper_bridge.bluebubbles")
 
-# BlueBubbles' internal tapback names <-> a display emoji.
-# See BlueBubbles private-api's `associatedMessageType` / message/react "reaction" field.
+# BlueBubbles' internal tapback names <-> the emoji shown on the Discord side.
+# See BlueBubbles private-api's `associatedMessageType` / message/react "reaction"
+# field. iMessage only has these 6 tapback types (BlueBubbles has no "send" support
+# for anything beyond them), so this is the canonical emoji used when an incoming
+# iMessage tapback gets mirrored as a Discord reaction.
 TAPBACK_TO_EMOJI = {
     "love": "❤️",
     "like": "👍",
@@ -25,13 +28,32 @@ TAPBACK_TO_EMOJI = {
     "emphasize": "‼️",
     "question": "❓",
 }
+
+# For the reverse direction (a user reacting in Discord -> sending an iMessage
+# tapback), accept a broader set of emoji people actually react with - skin-tone
+# variants of thumbs up/down, and visually/emotionally similar emoji for each
+# bucket - instead of only the exact canonical emoji above. Whatever the user
+# picks still collapses down to one of iMessage's 6 real tapback types.
+EMOJI_ALIASES = {
+    "love": [
+        "❤️", "❤", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "🩷", "🩵", "🩶",
+        "💕", "💞", "💓", "💗", "💖", "💘", "💝", "😍", "🥰",
+    ],
+    "like": ["👍", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿"],
+    "dislike": ["👎", "👎🏻", "👎🏼", "👎🏽", "👎🏾", "👎🏿"],
+    "laugh": ["🤣", "😂", "😆", "😹", "🤪"],
+    "emphasize": ["‼️", "‼", "❗", "❕"],
+    "question": ["❓", "❔"],
+}
+
 EMOJI_TO_TAPBACK = {}
-for _name, _emoji in TAPBACK_TO_EMOJI.items():
-    EMOJI_TO_TAPBACK[_emoji] = _name
-    # Also match the same emoji without a trailing variation selector, since
-    # different Discord clients/emoji pickers aren't always consistent about
-    # including U+FE0F.
-    EMOJI_TO_TAPBACK[_emoji.rstrip("️")] = _name
+for _name, _variants in EMOJI_ALIASES.items():
+    for _emoji in _variants:
+        EMOJI_TO_TAPBACK[_emoji] = _name
+        # Also match without a trailing variation selector, since different
+        # Discord clients/emoji pickers aren't always consistent about
+        # including U+FE0F.
+        EMOJI_TO_TAPBACK[_emoji.rstrip("️")] = _name
 
 # BlueBubbles reports the real mimeType on every attachment, but iMessage
 # photos are frequently HEIC/HEIF (Apple's native format) which Discord cannot
