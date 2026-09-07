@@ -270,14 +270,27 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
                 except Exception:
                     namespaces = set()
                 if namespaces:
+                    logger.debug(
+                        "Decrypting OMEMO message (namespaces=%s) from %s",
+                        namespaces,
+                        msg["from"],
+                    )
                     try:
-                        decrypted, device_info = await xep_0384.decrypt_message(msg)
+                        decrypted, device_info = await asyncio.wait_for(
+                            xep_0384.decrypt_message(msg), timeout=20
+                        )
                         logger.debug(
                             "Decrypted OMEMO message (namespaces=%s) from device: %s",
                             namespaces,
                             device_info,
                         )
                         return decrypted["body"] or None
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            "Timed out decrypting OMEMO message from %s after 20s",
+                            msg["from"],
+                        )
+                        return None
                     except Exception as e:
                         logger.error(
                             "Failed to decrypt OMEMO message from %s: %s",
@@ -364,6 +377,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
 
     async def _on_carbon_received(self, msg):
         """Handle carbon copy of incoming message delivered to another client."""
+        logger.debug("carbon_received event fired")
         try:
             forwarded = msg["carbon_received"]["forwarded"]["message"]
             body = await self._extract_body(forwarded)
@@ -392,10 +406,11 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
                         is_self=False,
                     )
         except Exception as e:
-            logger.debug("Error handling carbon_received: %s", e)
+            logger.error("Error handling carbon_received: %s", e, exc_info=True)
 
     async def _on_carbon_sent(self, msg):
         """Handle carbon copy of outgoing message sent from another client."""
+        logger.debug("carbon_sent event fired")
         try:
             forwarded = msg["carbon_sent"]["forwarded"]["message"]
             body = await self._extract_body(forwarded)
@@ -421,7 +436,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
                         is_self=True,
                     )
         except Exception as e:
-            logger.debug("Error handling carbon_sent: %s", e)
+            logger.error("Error handling carbon_sent: %s", e, exc_info=True)
 
     async def _send_encrypted(self, recipient_jid: str, body: str, mtype: str) -> bool:
         """Try to send body as an OMEMO-encrypted message. Returns False (and
