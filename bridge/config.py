@@ -57,6 +57,8 @@ class XMPPConfig:
     status_message: str = "Online via Discord Bridge"
     category_name: str = "💬 XMPP"
     auto_reconnect: bool = True
+    omemo_enabled: bool = True
+    omemo_data_path: str = "./xmpp_omemo.json"
 
 
 @dataclass
@@ -310,6 +312,13 @@ class Config:
             ),
             auto_reconnect=bool(
                 os.getenv("XMPP_AUTO_RECONNECT", xmpp_data.get("auto_reconnect", True))
+            ),
+            omemo_enabled=bool(
+                os.getenv("XMPP_OMEMO_ENABLED", xmpp_data.get("omemo_enabled", True))
+            ),
+            omemo_data_path=os.getenv(
+                "XMPP_OMEMO_DATA_PATH",
+                xmpp_data.get("omemo_data_path", "./xmpp_omemo.json"),
             ),
         )
 

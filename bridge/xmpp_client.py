@@ -2,15 +2,120 @@
 
 import asyncio
 import hashlib
+import json
 import logging
+import os
+import sys
 import urllib.parse
-from typing import Optional, Callable, Dict, Any, List, Tuple
+from pathlib import Path
+from typing import Optional, Callable, Dict, Any, List, Tuple, FrozenSet, Set
 import aiohttp
 import slixmpp
+from slixmpp.jid import JID
 
 from .config import XMPPConfig
 
 logger = logging.getLogger("beeper_bridge.xmpp")
+
+try:
+    import oldmemo  # noqa: F401  (registers the OMEMO:1 backend on import)
+    import twomemo  # noqa: F401  (registers the OMEMO:2 backend on import)
+    from omemo.storage import Just, Maybe, Nothing, Storage
+    from omemo.types import DeviceInformation, JSONType
+    from slixmpp.plugins import register_plugin
+    from slixmpp_omemo import TrustLevel, XEP_0384
+
+    OMEMO_LIBS_AVAILABLE = True
+except ImportError as e:
+    OMEMO_LIBS_AVAILABLE = False
+    logger.warning(
+        "OMEMO libraries not installed (%s); XMPP messages will be sent/received "
+        "in plaintext only. Install slixmpp-omemo, oldmemo and twomemo to enable "
+        "OMEMO support.",
+        e,
+    )
+
+if OMEMO_LIBS_AVAILABLE:
+
+    class _OmemoJSONStorage(Storage):
+        """Persists OMEMO device/session/trust state to a single JSON file."""
+
+        def __init__(self, json_file_path: Path) -> None:
+            super().__init__()
+            self.__json_file_path = json_file_path
+            self.__data: Dict[str, JSONType] = {}
+            try:
+                with open(self.__json_file_path, encoding="utf8") as f:
+                    self.__data = json.load(f)
+            except Exception:
+                pass
+
+        async def _load(self, key: str) -> "Maybe[JSONType]":
+            if key in self.__data:
+                return Just(self.__data[key])
+            return Nothing()
+
+        async def _store(self, key: str, value: "JSONType") -> None:
+            self.__data[key] = value
+            os.makedirs(os.path.dirname(self.__json_file_path) or ".", exist_ok=True)
+            with open(self.__json_file_path, "w", encoding="utf8") as f:
+                json.dump(self.__data, f)
+
+        async def _delete(self, key: str) -> None:
+            self.__data.pop(key, None)
+            os.makedirs(os.path.dirname(self.__json_file_path) or ".", exist_ok=True)
+            with open(self.__json_file_path, "w", encoding="utf8") as f:
+                json.dump(self.__data, f)
+
+    class _XEP_0384Impl(XEP_0384):
+        """OMEMO plugin wiring: JSON-backed storage, blind trust-before-verify."""
+
+        default_config = {
+            "fallback_message": "This message is OMEMO encrypted.",
+            "json_file_path": None,
+        }
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.__storage: Storage
+
+        def plugin_init(self) -> None:
+            if not self.json_file_path:
+                raise RuntimeError("OMEMO json_file_path not specified.")
+            self.__storage = _OmemoJSONStorage(Path(self.json_file_path))
+            super().plugin_init()
+
+        @property
+        def storage(self) -> Storage:
+            return self.__storage
+
+        @property
+        def _btbv_enabled(self) -> bool:
+            # Blind trust-before-verify: trust new devices on first contact,
+            # like every mainstream OMEMO client does by default. There is no
+            # interactive UI on a bridge bot to do manual fingerprint checks.
+            return True
+
+        async def _devices_blindly_trusted(
+            self,
+            blindly_trusted: "FrozenSet[DeviceInformation]",
+            identifier: Optional[str],
+        ) -> None:
+            logger.info("OMEMO devices blindly trusted for %s: %s", identifier, blindly_trusted)
+
+        async def _prompt_manual_trust(
+            self,
+            manually_trusted: "FrozenSet[DeviceInformation]",
+            identifier: Optional[str],
+        ) -> None:
+            # BTBV is enabled above, so this should never actually be reached.
+            logger.warning(
+                "OMEMO manual trust prompt requested for %s (no interactive UI available): %s",
+                identifier,
+                manually_trusted,
+            )
+
+    register_plugin(_XEP_0384Impl)
 
 
 class XMPPBridgeClient(slixmpp.ClientXMPP):
@@ -44,6 +149,26 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         self.register_plugin("xep_0078")  # Non-SASL Authentication
         self.register_plugin("xep_0280")  # Message Carbons
 
+        self.omemo_available = OMEMO_LIBS_AVAILABLE and config.omemo_enabled
+        if self.omemo_available:
+            self.register_plugin("xep_0060")  # PubSub (OMEMO device list storage)
+            self.register_plugin("xep_0163")  # Personal Eventing Protocol (PEP)
+            self.register_plugin("xep_0380")  # Explicit Message Encryption
+            self.register_plugin(
+                "xep_0384",
+                {"json_file_path": config.omemo_data_path},
+                module=sys.modules[__name__],
+            )  # OMEMO
+            logger.info(
+                "OMEMO support enabled for XMPP (data file: %s)",
+                config.omemo_data_path,
+            )
+        elif config.omemo_enabled and not OMEMO_LIBS_AVAILABLE:
+            logger.warning(
+                "OMEMO was requested in config but the required libraries are not "
+                "installed; falling back to plaintext XMPP."
+            )
+
         # Register event handlers
         self.add_event_handler("session_start", self._on_session_start)
         self.add_event_handler("message", self._on_message)
@@ -51,6 +176,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         self.add_event_handler("carbon_received", self._on_carbon_received)
         self.add_event_handler("carbon_sent", self._on_carbon_sent)
         self.add_event_handler("disconnected", self._on_disconnected)
+        self.add_event_handler("presence_subscribe", self._on_presence_subscribe)
 
     async def _on_session_start(self, event):
         """Handle session establishment and presence announcement."""
@@ -71,6 +197,21 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle disconnection."""
         self.is_connected_event.clear()
         logger.warning("XMPP client disconnected.")
+
+    async def _on_presence_subscribe(self, presence):
+        """Auto-accept subscription requests so contacts can always reach us.
+
+        OMEMO device-bundle lookups go through PEP/PubSub, which requires a
+        mutual roster subscription; refusing/ignoring requests here silently
+        blocks OMEMO from working for that contact.
+        """
+        from_jid = presence["from"]
+        try:
+            logger.info("Received XMPP subscription request from %s, auto-approving", from_jid)
+            self.send_presence_subscription(pto=from_jid, ptype="subscribed")
+            self.send_presence_subscription(pto=from_jid, ptype="subscribe")
+        except Exception as e:
+            logger.error("Error auto-approving subscription from %s: %s", from_jid, e)
 
     def get_contact_display_name(self, jid_str: str) -> str:
         """Get the clean display name for a contact from roster or JID."""
@@ -115,13 +256,44 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
                 logger.debug("Could not download XMPP image URL %s: %s", url, e)
         return None
 
+    async def _extract_body(self, msg) -> Optional[str]:
+        """Return the plaintext body of a message stanza, decrypting it first
+        if it carries OMEMO-encrypted content."""
+        if self.omemo_available:
+            xep_0384 = self["xep_0384"]
+            if xep_0384:
+                try:
+                    namespaces = xep_0384.is_encrypted(msg)
+                except Exception:
+                    namespaces = set()
+                if namespaces:
+                    try:
+                        decrypted, device_info = await xep_0384.decrypt_message(msg)
+                        logger.debug(
+                            "Decrypted OMEMO message (namespaces=%s) from device: %s",
+                            namespaces,
+                            device_info,
+                        )
+                        return decrypted["body"] or None
+                    except Exception as e:
+                        logger.error(
+                            "Failed to decrypt OMEMO message from %s: %s",
+                            msg["from"],
+                            e,
+                            exc_info=True,
+                        )
+                        return None
+        return msg["body"] or None
+
     async def _on_message(self, msg):
         """Handle incoming direct 1-on-1 chat messages."""
-        if msg["type"] in ("chat", "normal") and msg["body"]:
+        if msg["type"] in ("chat", "normal"):
+            body = await self._extract_body(msg)
+            if not body:
+                return
             from_jid = str(msg["from"].bare)
             sender_nick = self.get_contact_display_name(from_jid)
             avatar_url = self.get_contact_avatar_url(from_jid, sender_nick)
-            body = msg["body"]
 
             files_to_send: List[Tuple[str, bytes]] = []
             img_dl = await self._try_download_image(body.strip())
@@ -148,16 +320,16 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
 
     async def _on_groupchat_message(self, msg):
         """Handle incoming Multi-User Chat (MUC) messages."""
-        if msg["body"]:
-            room_jid = str(msg["from"].bare)
-            sender_nick = msg["from"].resource or "Anonymous"
+        room_jid = str(msg["from"].bare)
+        sender_nick = msg["from"].resource or "Anonymous"
 
-            # Skip self-messages in group chats
-            if sender_nick == self.boundjid.user:
-                return
+        # Skip self-messages in group chats
+        if sender_nick == self.boundjid.user:
+            return
 
+        body = await self._extract_body(msg)
+        if body:
             avatar_url = self.get_contact_avatar_url(str(msg["from"]), sender_nick)
-            body = msg["body"]
 
             files_to_send: List[Tuple[str, bytes]] = []
             img_dl = await self._try_download_image(body.strip())
@@ -191,11 +363,11 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle carbon copy of incoming message delivered to another client."""
         try:
             forwarded = msg["carbon_received"]["forwarded"]["message"]
-            if forwarded["body"]:
+            body = await self._extract_body(forwarded)
+            if body:
                 from_jid = str(forwarded["from"].bare)
                 sender_nick = self.get_contact_display_name(from_jid)
                 avatar_url = self.get_contact_avatar_url(from_jid, sender_nick)
-                body = forwarded["body"]
 
                 files_to_send: List[Tuple[str, bytes]] = []
                 img_dl = await self._try_download_image(body.strip())
@@ -223,10 +395,10 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle carbon copy of outgoing message sent from another client."""
         try:
             forwarded = msg["carbon_sent"]["forwarded"]["message"]
-            if forwarded["body"]:
+            body = await self._extract_body(forwarded)
+            if body:
                 to_jid = str(forwarded["to"].bare)
                 sender_nick = f"{self.boundjid.user} (You)"
-                body = forwarded["body"]
 
                 files_to_send: List[Tuple[str, bytes]] = []
                 img_dl = await self._try_download_image(body.strip())
@@ -248,6 +420,41 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         except Exception as e:
             logger.debug("Error handling carbon_sent: %s", e)
 
+    async def _send_encrypted(self, recipient_jid: str, body: str, mtype: str) -> bool:
+        """Try to send body as an OMEMO-encrypted message. Returns False (and
+        logs) if encryption isn't possible, so the caller can fall back to
+        plaintext rather than silently dropping the message."""
+        xep_0384 = self["xep_0384"]
+        if not xep_0384:
+            return False
+        try:
+            stanza = self.make_message(mto=recipient_jid, mtype=mtype)
+            stanza["body"] = body
+            message, encryption_errors = await xep_0384.encrypt_message(
+                stanza, {JID(recipient_jid)}
+            )
+            if encryption_errors:
+                logger.info(
+                    "Non-critical OMEMO encryption errors for %s: %s",
+                    recipient_jid,
+                    encryption_errors,
+                )
+            if message is None:
+                logger.warning(
+                    "OMEMO encryption produced no message for %s, falling back to plaintext",
+                    recipient_jid,
+                )
+                return False
+            message.send()
+            return True
+        except Exception as e:
+            logger.warning(
+                "OMEMO encryption failed for %s, falling back to plaintext: %s",
+                recipient_jid,
+                e,
+            )
+            return False
+
     async def send_chat_message(
         self, recipient_jid: str, body: str, is_groupchat: bool = False
     ) -> bool:
@@ -265,7 +472,11 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
             return False
         mtype = "groupchat" if is_groupchat else "chat"
         try:
-            self.send_message(mto=recipient_jid, mbody=body, mtype=mtype)
+            sent = False
+            if self.omemo_available and not is_groupchat:
+                sent = await self._send_encrypted(recipient_jid, body, mtype)
+            if not sent:
+                self.send_message(mto=recipient_jid, mbody=body, mtype=mtype)
         except Exception as e:
             logger.error(
                 "Error sending XMPP message to %s: %s", recipient_jid, e, exc_info=True
