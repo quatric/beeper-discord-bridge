@@ -21,7 +21,7 @@ TAPBACK_TO_EMOJI = {
     "love": "❤️",
     "like": "👍",
     "dislike": "👎",
-    "laugh": "😂",
+    "laugh": "🤣",
     "emphasize": "‼️",
     "question": "❓",
 }
