@@ -216,10 +216,13 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
     def get_contact_display_name(self, jid_str: str) -> str:
         """Get the clean display name for a contact from roster or JID."""
         bare_jid = jid_str.split("/")[0].lower()
-        if hasattr(self, "client_roster") and self.client_roster:
-            roster_entry = self.client_roster.get(bare_jid)
-            if roster_entry and roster_entry.get("name"):
-                return roster_entry["name"]
+        try:
+            if bare_jid in self.client_roster:
+                name = self.client_roster[bare_jid]["name"]
+                if name:
+                    return name
+        except Exception as e:
+            logger.debug("Could not look up roster name for %s: %s", bare_jid, e)
         user = bare_jid.split("@")[0]
         return user.capitalize() if user else jid_str
 
