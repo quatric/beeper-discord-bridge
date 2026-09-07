@@ -698,10 +698,12 @@ class TeamsBridgeClient:
                             # Extract sender, text, and metadata
                             if self._is_ic3:
                                 msg_type = msg.get("messagetype", "")
-                                if msg_type in (
-                                    "Control/Typing",
-                                    "Control/ClearTyping",
-                                ):
+                                # Only relay actual chat text. IC3 also emits system/event
+                                # messages (thread activity, control signals, etc.) whose
+                                # "content" is XML/JSON full of org/thread IDs rather than
+                                # anything a human wrote -- skip anything that isn't a
+                                # plain text message so those don't get bridged as garbage.
+                                if msg_type not in ("RichText/Html", "Text", "RichText"):
                                     continue
                                 sender_id, sender_name = _ic3_sender(msg)
                                 raw_content = msg.get("content", "")
