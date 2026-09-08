@@ -28,6 +28,11 @@ def clean_aim_html(text: str) -> str:
     return html.unescape(text).strip()
 
 
+def _normalize_screen_name(screen_name: str) -> str:
+    """AIM screen names are case-insensitive and ignore spaces."""
+    return (screen_name or "").replace(" ", "").lower()
+
+
 class AIMBridgeClient:
     """Async AIM / OSCAR client for bridging AIM Phoenix conversations with Discord."""
 
@@ -565,6 +570,10 @@ class AIMBridgeClient:
             cleaned_text[:60],
         )
 
+        is_self = _normalize_screen_name(sender_sn) == _normalize_screen_name(
+            self.formatted_screen_name or self.config.screen_name
+        )
+
         if self.on_message_callback:
             try:
                 await self.on_message_callback(
@@ -572,6 +581,7 @@ class AIMBridgeClient:
                     text=cleaned_text,
                     is_away=is_auto_response,
                     msg_id=msg_id,
+                    is_self=is_self,
                 )
             except Exception as e:
                 logger.error("Error in AIM on_message_callback: %s", e, exc_info=True)
