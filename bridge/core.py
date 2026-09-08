@@ -559,7 +559,11 @@ class BeeperDiscordBridge:
                     channel = None
 
         if not channel:
-            clean_nick = sender_name.split("@")[0].replace("/", "-")
+            # Name the channel after the other party (room_jid), not whoever
+            # happens to send the first message - otherwise a self-sent
+            # carbon copy names it after us instead of the contact.
+            name_source = room_jid if room_jid else sender_name
+            clean_nick = name_source.split("@")[0].replace("/", "-")
             channel_name = clean_nick.lower()
             clean_name = self.discord_client.clean_channel_name(channel_name)
             category = self.config.xmpp.category_name
