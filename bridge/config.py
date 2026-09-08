@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 import yaml
 from dotenv import load_dotenv
 
@@ -59,6 +59,7 @@ class XMPPConfig:
     auto_reconnect: bool = True
     omemo_enabled: bool = True
     omemo_data_path: str = "./xmpp_omemo.json"
+    contact_display_names: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -320,6 +321,10 @@ class Config:
                 "XMPP_OMEMO_DATA_PATH",
                 xmpp_data.get("omemo_data_path", "./xmpp_omemo.json"),
             ),
+            contact_display_names={
+                str(k).lower(): str(v)
+                for k, v in (xmpp_data.get("contact_display_names", {}) or {}).items()
+            },
         )
 
         teams_data = data.get("teams", {})

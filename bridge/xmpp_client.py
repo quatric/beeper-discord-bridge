@@ -216,6 +216,9 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
     def get_contact_display_name(self, jid_str: str) -> str:
         """Get the clean display name for a contact from roster or JID."""
         bare_jid = jid_str.split("/")[0].lower()
+        override = self.config.contact_display_names.get(bare_jid)
+        if override:
+            return override
         try:
             if bare_jid in self.client_roster:
                 name = self.client_roster[bare_jid]["name"]
