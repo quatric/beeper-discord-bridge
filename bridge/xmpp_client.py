@@ -267,8 +267,15 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
             if xep_0384:
                 try:
                     namespaces = xep_0384.is_encrypted(msg)
-                except Exception:
+                except Exception as e:
+                    logger.error("is_encrypted() raised for %s: %s", msg["from"], e, exc_info=True)
                     namespaces = set()
+                logger.debug(
+                    "_extract_body: namespaces=%s body=%r for msg from %s",
+                    namespaces,
+                    msg["body"],
+                    msg["from"],
+                )
                 if namespaces:
                     logger.debug(
                         "Decrypting OMEMO message (namespaces=%s) from %s",
