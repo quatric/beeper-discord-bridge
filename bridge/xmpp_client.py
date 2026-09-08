@@ -268,20 +268,11 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
                 try:
                     namespaces = xep_0384.is_encrypted(msg)
                 except Exception as e:
-                    logger.error("is_encrypted() raised for %s: %s", msg["from"], e, exc_info=True)
-                    namespaces = set()
-                logger.debug(
-                    "_extract_body: namespaces=%s body=%r for msg from %s",
-                    namespaces,
-                    msg["body"],
-                    msg["from"],
-                )
-                if namespaces:
-                    logger.debug(
-                        "Decrypting OMEMO message (namespaces=%s) from %s",
-                        namespaces,
-                        msg["from"],
+                    logger.error(
+                        "is_encrypted() raised for %s: %s", msg["from"], e, exc_info=True
                     )
+                    namespaces = set()
+                if namespaces:
                     try:
                         decrypted, device_info = await asyncio.wait_for(
                             xep_0384.decrypt_message(msg), timeout=20
@@ -386,7 +377,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle carbon copy of incoming message delivered to another client."""
         logger.debug("carbon_received event fired")
         try:
-            forwarded = msg["carbon_received"]["forwarded"]["message"]
+            forwarded = msg["carbon_received"]["forwarded"]["stanza"]
             body = await self._extract_body(forwarded)
             if body:
                 from_jid = str(forwarded["from"].bare)
@@ -419,7 +410,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle carbon copy of outgoing message sent from another client."""
         logger.debug("carbon_sent event fired")
         try:
-            forwarded = msg["carbon_sent"]["forwarded"]["message"]
+            forwarded = msg["carbon_sent"]["forwarded"]["stanza"]
             body = await self._extract_body(forwarded)
             if body:
                 to_jid = str(forwarded["to"].bare)
