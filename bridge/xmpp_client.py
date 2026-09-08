@@ -377,7 +377,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle carbon copy of incoming message delivered to another client."""
         logger.debug("carbon_received event fired")
         try:
-            forwarded = msg["carbon_received"]["forwarded"]["stanza"]
+            forwarded = msg["carbon_received"]
             body = await self._extract_body(forwarded)
             if body:
                 from_jid = str(forwarded["from"].bare)
@@ -410,7 +410,7 @@ class XMPPBridgeClient(slixmpp.ClientXMPP):
         """Handle carbon copy of outgoing message sent from another client."""
         logger.debug("carbon_sent event fired")
         try:
-            forwarded = msg["carbon_sent"]["forwarded"]["stanza"]
+            forwarded = msg["carbon_sent"]
             body = await self._extract_body(forwarded)
             if body:
                 to_jid = str(forwarded["to"].bare)
