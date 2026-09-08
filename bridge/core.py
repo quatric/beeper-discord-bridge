@@ -586,7 +586,12 @@ class BeeperDiscordBridge:
                 )
 
         if channel:
-            await self._apply_chat_title(channel, sender_name.split("@")[0])
+            # Use the other party (room_jid), not sender_name - sender_name
+            # flips between the contact and "<us> (You)" depending on which
+            # side sent last, which fought itself renaming the channel back
+            # and forth on every message (and could trip a rate limit).
+            title_source = room_jid if room_jid else sender_name
+            await self._apply_chat_title(channel, title_source.split("@")[0])
             self.db.update_room_activity(target_id, sender_name)
             if is_self:
                 sender_display = (
